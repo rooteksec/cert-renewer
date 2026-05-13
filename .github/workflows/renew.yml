@@ -1,0 +1,48 @@
+name: Renew certificate
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'
+  workflow_dispatch:
+
+jobs:
+  renew:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install acme.sh
+        run: curl https://get.acme.sh | sh -s email=rooteksec@proton.me
+
+      - name: Issue cert with DNS-01 via Cloudflare
+        env:
+          CF_Token: ${{ secrets.CF_API_TOKEN }}
+          CF_Zone_ID: ${{ secrets.CF_ZONE_ID }}
+        run: |
+          ~/.acme.sh/acme.sh --issue \
+            --dns dns_cf \
+            -d "localhost.lolcert.online" \
+            --server letsencrypt
+
+      - name: Export as PFX - No Password
+        run: |
+          CERT_DIR=$(find ~/.acme.sh/ -maxdepth 1 -type d -name "localhost.lolcert.online*" | head -1)
+          echo "Using directory: $CERT_DIR"
+          openssl pkcs12 -export \
+            -in "$CERT_DIR/fullchain.cer" \
+            -inkey "$CERT_DIR/localhost.lolcert.online.key" \
+            -out localhost.pfx \
+            -passout pass:
+
+      - name: Upload PFX to R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+        run: |
+          aws s3 cp localhost.pfx s3://cert/localhost.pfx \
+            --endpoint-url https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com \
+            --content-type application/x-pkcs12
+          echo "PFX uploaded to R2"
